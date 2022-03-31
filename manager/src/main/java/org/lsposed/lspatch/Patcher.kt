@@ -43,6 +43,7 @@ object Patcher {
                 if (embeddedModules.isNotEmpty()) {
                     add("-m"); addAll(embeddedModules)
                 }
+                add("-f")
 
                 toTypedArray()
             }
