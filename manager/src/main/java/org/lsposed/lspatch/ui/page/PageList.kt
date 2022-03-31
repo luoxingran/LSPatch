@@ -16,54 +16,49 @@ enum class PageList(
     val iconSelected: ImageVector? = null,
     val iconNotSelected: ImageVector? = null,
     val arguments: List<NamedNavArgument> = emptyList(),
-    val topBar: @Composable () -> Unit,
-    val fab: @Composable () -> Unit = {},
     val body: @Composable NavBackStackEntry.() -> Unit
 ) {
-    Home(
-        iconSelected = Icons.Filled.Home,
-        iconNotSelected = Icons.Outlined.Home,
-        topBar = { HomeTopBar() },
-        body = { HomePage() }
+    Repo(
+        iconSelected = Icons.Filled.GetApp,
+        iconNotSelected = Icons.Outlined.GetApp,
+        body = {}
     ),
     Manage(
         iconSelected = Icons.Filled.Dashboard,
         iconNotSelected = Icons.Outlined.Dashboard,
-        topBar = { ManageTopBar() },
-        fab = { ManageFab() },
-        body = {}
+        body = { ManagePage() }
     ),
-    Repo(
-        iconSelected = Icons.Filled.GetApp,
-        iconNotSelected = Icons.Outlined.GetApp,
-        topBar = {},
+    Home(
+        iconSelected = Icons.Filled.Home,
+        iconNotSelected = Icons.Outlined.Home,
+        body = { HomePage() }
+    ),
+    Logs(
+        iconSelected = Icons.Filled.Assignment,
+        iconNotSelected = Icons.Outlined.Assignment,
         body = {}
     ),
     Settings(
         iconSelected = Icons.Filled.Settings,
         iconNotSelected = Icons.Outlined.Settings,
-        topBar = {},
         body = {}
     ),
     NewPatch(
-        topBar = {},
-        fab = { NewPatchFab() },
-        body = { NewPatchPage() }
+        body = { NewPatchPage(this) }
     ),
     SelectApps(
         arguments = listOf(
             navArgument("multiSelect") { type = NavType.BoolType }
         ),
-        topBar = { SelectAppsTopBar() },
-        fab = { SelectAppsFab() },
         body = { SelectAppsPage(this) }
     );
 
     val title: String
         @Composable get() = when (this) {
-            Home -> stringResource(R.string.app_name)
-            Manage -> stringResource(R.string.page_manage)
             Repo -> stringResource(R.string.page_repo)
+            Manage -> stringResource(R.string.page_manage)
+            Home -> stringResource(R.string.app_name)
+            Logs -> stringResource(R.string.page_logs)
             Settings -> stringResource(R.string.page_settings)
             NewPatch -> stringResource(R.string.page_new_patch)
             SelectApps -> stringResource(R.string.page_select_apps)

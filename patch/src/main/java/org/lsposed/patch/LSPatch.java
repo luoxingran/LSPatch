@@ -13,13 +13,13 @@ import com.android.tools.build.apkzlib.zip.ZFile;
 import com.android.tools.build.apkzlib.zip.ZFileOptions;
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
+import com.beust.jcommander.ParameterException;
 import com.google.gson.Gson;
 import com.wind.meditor.core.ManifestEditor;
 import com.wind.meditor.property.AttributeItem;
 import com.wind.meditor.property.ModificationProperty;
 import com.wind.meditor.utils.NodeValue;
 
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.lsposed.lspatch.share.PatchConfig;
 import org.lsposed.patch.util.ApkSignatureHelper;
@@ -34,7 +34,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.security.KeyStore;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -73,6 +72,9 @@ public class LSPatch {
 
     @Parameter(names = {"-l", "--sigbypasslv"}, description = "Signature bypass level. 0 (disable), 1 (pm), 2 (pm+openat). default 0")
     private int sigbypassLevel = 0;
+
+    @Parameter(names = {"-k", "--keystore"}, arity = 4, description = "Set custom signature keystore. Followed by 4 arguments: keystore path, keystore password, keystore alias, keystore alias password")
+    private List<String> keystoreArgs = Arrays.asList(null, "123456", "key0", "123456");
 
     @Parameter(names = {"--v1"}, arity = 1, description = "Sign with v1 signature")
     private boolean v1 = false;
@@ -119,38 +121,40 @@ public class LSPatch {
     private final Logger logger;
 
     public LSPatch(Logger logger, String... args) {
-        jCommander = JCommander.newBuilder()
-                .addObject(this)
-                .build();
-        jCommander.parse(args);
+        jCommander = JCommander.newBuilder().addObject(this).build();
+        try {
+            jCommander.parse(args);
+        } catch (ParameterException e) {
+            logger.e(e.getMessage() + "\n");
+            help = true;
+        }
+        if (apkPaths == null || apkPaths.isEmpty()) {
+            logger.e("No apk specified\n");
+            help = true;
+        }
+        if (!modules.isEmpty() && useManager) {
+            logger.e("Should not use --embed and --manager at the same time\n");
+            help = true;
+        }
+
         this.logger = logger;
         logger.verbose = verbose;
     }
 
     public static void main(String... args) throws IOException {
-        LSPatch lsPatch = new LSPatch(new JavaLogger(), args);
+        LSPatch lspatch = new LSPatch(new JavaLogger(), args);
+        if (lspatch.help) {
+            lspatch.jCommander.usage();
+            return;
+        }
         try {
-            lsPatch.doCommandLine();
+            lspatch.doCommandLine();
         } catch (PatchError e) {
             e.printStackTrace(System.err);
         }
     }
 
     public void doCommandLine() throws PatchError, IOException {
-        if (help) {
-            jCommander.usage();
-            return;
-        }
-        if (apkPaths == null || apkPaths.isEmpty()) {
-            jCommander.usage();
-            return;
-        }
-
-        if (!modules.isEmpty() && useManager) {
-            jCommander.usage();
-            return;
-        }
-
         for (var apk : apkPaths) {
             File srcApkFile = new File(apk).getAbsoluteFile();
 
@@ -159,7 +163,7 @@ public class LSPatch {
             var outputDir = new File(outputPath);
             outputDir.mkdirs();
 
-            File outputFile = new File(outputDir, String.format("%s-lv%s-xposed-signed.apk", FilenameUtils.getBaseName(apkFileName), sigbypassLevel)).getAbsoluteFile();
+            File outputFile = new File(outputDir, String.format("%s-lv%s-lspatched.apk", FilenameUtils.getBaseName(apkFileName), sigbypassLevel)).getAbsoluteFile();
 
             if (outputFile.exists() && !forceOverwrite)
                 throw new PatchError(outputPath + " exists. Use --force to overwrite");
@@ -173,24 +177,30 @@ public class LSPatch {
         if (!srcApkFile.exists())
             throw new PatchError("The source apk file does not exit. Please provide a correct path.");
 
-        File tmpApk = Files.createTempFile(srcApkFile.getName(), "unsigned").toFile();
-        tmpApk.delete();
+        outputFile.delete();
 
         logger.d("apk path: " + srcApkFile);
 
         logger.i("Parsing original apk...");
 
-        try (var dstZFile = ZFile.openReadWrite(tmpApk, Z_FILE_OPTIONS);
+        try (var dstZFile = ZFile.openReadWrite(outputFile, Z_FILE_OPTIONS);
              var srcZFile = dstZFile.addNestedZip((ignore) -> ORIGINAL_APK_ASSET_PATH, srcApkFile, false)) {
 
             // sign apk
-            logger.i("Register apk signer...");
             try {
                 var keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
-                try (var is = getClass().getClassLoader().getResourceAsStream("assets/keystore")) {
-                    keyStore.load(is, "123456".toCharArray());
+                if (keystoreArgs.get(0) == null) {
+                    logger.i("Register apk signer with default keystore...");
+                    try (var is = getClass().getClassLoader().getResourceAsStream("assets/keystore")) {
+                        keyStore.load(is, keystoreArgs.get(1).toCharArray());
+                    }
+                } else {
+                    logger.i("Register apk signer with custom keystore...");
+                    try (var is = new FileInputStream(keystoreArgs.get(0))) {
+                        keyStore.load(is, keystoreArgs.get(1).toCharArray());
+                    }
                 }
-                var entry = (KeyStore.PrivateKeyEntry) keyStore.getEntry("key0", new KeyStore.PasswordProtection("123456".toCharArray()));
+                var entry = (KeyStore.PrivateKeyEntry) keyStore.getEntry(keystoreArgs.get(2), new KeyStore.PasswordProtection(keystoreArgs.get(3).toCharArray()));
                 new SigningExtension(SigningOptions.builder()
                         .setMinSdkVersion(28)
                         .setV1SigningEnabled(v1)
@@ -224,8 +234,7 @@ public class LSPatch {
                 var pair = ManifestParser.parseManifestFile(is);
                 if (pair == null)
                     throw new PatchError("Failed to parse AndroidManifest.xml");
-                appComponentFactory = pair.appComponentFactory == null ? "" : pair.appComponentFactory;
-
+                appComponentFactory = pair.appComponentFactory;
                 logger.d("original appComponentFactory class: " + appComponentFactory);
             }
 
@@ -242,8 +251,8 @@ public class LSPatch {
             // copy so and dex files into the unzipped apk
             // do not put liblspd.so into apk!lib because x86 native bridge causes crash
             for (String arch : APK_LIB_PATH_ARRAY) {
-                String entryName = "assets/lspatch/lspd/" + arch + "/liblspd.so";
-                try (var is = getClass().getClassLoader().getResourceAsStream("assets/so/" + (arch.equals("arm") ? "armeabi-v7a" : (arch.equals("arm64") ? "arm64-v8a" : arch)) + "/liblspd.so")) {
+                String entryName = "assets/lspatch/so/" + arch + "/liblspatch.so";
+                try (var is = getClass().getClassLoader().getResourceAsStream("assets/so/" + (arch.equals("arm") ? "armeabi-v7a" : (arch.equals("arm64") ? "arm64-v8a" : arch)) + "/liblspatch.so")) {
                     dstZFile.add(entryName, is, false); // no compress for so
                 } catch (Throwable e) {
                     // More exception info
@@ -296,7 +305,9 @@ public class LSPatch {
                 return false;
             });
 
-            embedModules(dstZFile);
+            if (!useManager) {
+                embedModules(dstZFile);
+            }
 
             // create zip link
             logger.d("Creating nested apk link...");
@@ -313,15 +324,8 @@ public class LSPatch {
             dstZFile.realign();
 
             logger.i("Writing apk...");
-        } finally {
-            try {
-                outputFile.delete();
-                FileUtils.moveFile(tmpApk, outputFile);
-                logger.i("Done. Output APK: " + outputFile.getAbsolutePath());
-            } catch (Throwable e) {
-                throw new PatchError("Error writing apk", e);
-            }
         }
+        logger.i("Done. Output APK: " + outputFile.getAbsolutePath());
     }
 
     private void embedModules(ZFile zFile) {
